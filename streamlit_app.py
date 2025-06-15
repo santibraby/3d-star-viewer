@@ -12,32 +12,103 @@ from gaia_star_fetcher import GaiaStarFetcher
 # Page configuration
 st.set_page_config(
     page_title="3D Star Viewer - Gaia Data",
-    page_icon="✨",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# Custom CSS for dark theme with Karla font
 st.markdown("""
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Karla:wght@300;400;600&display=swap');
+    
+    /* Main app styling */
+    .stApp {
+        background-color: #2b2b2b;
+    }
+    
     .main {
         padding-top: 0rem;
+        background-color: #2b2b2b;
     }
+    
     .block-container {
         padding-top: 1rem;
         padding-bottom: 0rem;
     }
+    
+    /* Typography */
+    h1, h2, h3, h4, h5, h6, p, span, div, label {
+        font-family: 'Karla', sans-serif !important;
+        color: white !important;
+    }
+    
     h1 {
         text-align: center;
-        color: #1e3d59;
+        font-weight: 600;
     }
+    
+    /* Sidebar styling */
+    .css-1d391kg, [data-testid="stSidebar"] {
+        background-color: #1f1f1f;
+    }
+    
+    .css-1d391kg *, [data-testid="stSidebar"] * {
+        color: white !important;
+    }
+    
+    /* Button styling */
     .stButton>button {
         width: 100%;
-        background-color: #1e3d59;
+        background-color: #3d3d3d;
         color: white;
+        font-family: 'Karla', sans-serif;
+        border: 1px solid #555;
     }
+    
     .stButton>button:hover {
-        background-color: #2e5d89;
+        background-color: #4d4d4d;
+        border: 1px solid #666;
+    }
+    
+    /* Slider styling */
+    .stSlider label {
+        color: white !important;
+    }
+    
+    /* Metrics styling */
+    [data-testid="metric-container"] {
+        background-color: #3d3d3d;
+        padding: 15px;
+        border-radius: 5px;
+        border: 1px solid #555;
+    }
+    
+    [data-testid="metric-container"] label {
+        color: white !important;
+    }
+    
+    /* Info and error boxes */
+    .stAlert {
+        background-color: #3d3d3d;
+        color: white;
+        border: 1px solid #555;
+    }
+    
+    /* Download button styling */
+    .stDownloadButton>button {
+        background-color: #3d3d3d;
+        color: white;
+        border: 1px solid #555;
+    }
+    
+    .stDownloadButton>button:hover {
+        background-color: #4d4d4d;
+    }
+    
+    /* Spinner */
+    .stSpinner > div {
+        border-color: white !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -50,28 +121,37 @@ def create_threejs_visualization(star_data):
     <head>
         <meta charset="utf-8">
         <style>
-            body {{ margin: 0; overflow: hidden; background: #000; }}
+            @import url('https://fonts.googleapis.com/css2?family=Karla:wght@300;400&display=swap');
+            body {{ 
+                margin: 0; 
+                overflow: hidden; 
+                background: #2b2b2b; 
+            }}
             #info {{
                 position: absolute;
                 top: 10px;
                 left: 10px;
                 color: white;
-                font-family: Arial, sans-serif;
+                font-family: 'Karla', sans-serif;
                 font-size: 12px;
-                background: rgba(0,0,0,0.7);
+                font-weight: 300;
+                background: rgba(61, 61, 61, 0.9);
                 padding: 10px;
                 border-radius: 5px;
+                border: 1px solid #555;
             }}
             #star-info {{
                 position: absolute;
                 bottom: 10px;
                 left: 10px;
                 color: white;
-                font-family: Arial, sans-serif;
+                font-family: 'Karla', sans-serif;
                 font-size: 12px;
-                background: rgba(0,0,0,0.7);
+                font-weight: 300;
+                background: rgba(61, 61, 61, 0.9);
                 padding: 10px;
                 border-radius: 5px;
+                border: 1px solid #555;
                 display: none;
             }}
         </style>
@@ -90,6 +170,8 @@ def create_threejs_visualization(star_data):
             
             // Scene setup
             const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x2b2b2b); // Dark grey background
+            
             const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
             const renderer = new THREE.WebGLRenderer({{ antialias: true }});
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -100,6 +182,8 @@ def create_threejs_visualization(star_data):
             const starMeshes = [];
             const raycaster = new THREE.Raycaster();
             const mouse = new THREE.Vector2();
+            let selectedStar = null;
+            let originalMaterial = null;
             
             starData.stars.forEach((star, index) => {{
                 // Create sphere geometry for each star
@@ -126,10 +210,6 @@ def create_threejs_visualization(star_data):
             // Add some ambient light
             const ambientLight = new THREE.AmbientLight(0x404040);
             scene.add(ambientLight);
-            
-            // Add grid helper for reference
-            const gridHelper = new THREE.GridHelper(100, 20, 0x444444, 0x222222);
-            scene.add(gridHelper);
             
             // Camera position
             camera.position.set(30, 30, 30);
@@ -199,7 +279,7 @@ def create_threejs_visualization(star_data):
                 e.preventDefault();
             }});
             
-            // Click detection for star info
+            // Click detection for star info and hot pink selection
             renderer.domElement.addEventListener('click', (e) => {{
                 mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
                 mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
@@ -207,8 +287,27 @@ def create_threejs_visualization(star_data):
                 raycaster.setFromCamera(mouse, camera);
                 const intersects = raycaster.intersectObjects(starMeshes);
                 
+                // Reset previous selection
+                if (selectedStar && originalMaterial) {{
+                    selectedStar.material = originalMaterial;
+                }}
+                
                 if (intersects.length > 0) {{
-                    const star = intersects[0].object.userData;
+                    const clickedStar = intersects[0].object;
+                    const star = clickedStar.userData;
+                    
+                    // Store original material and create hot pink material
+                    originalMaterial = clickedStar.material;
+                    selectedStar = clickedStar;
+                    
+                    // Create hot pink material for selection
+                    clickedStar.material = new THREE.MeshBasicMaterial({{
+                        color: 0xFF1493,  // Hot pink
+                        emissive: 0xFF1493,
+                        emissiveIntensity: 1
+                    }});
+                    
+                    // Update info display
                     const infoDiv = document.getElementById('star-info');
                     infoDiv.innerHTML = `
                         <strong>Star ID:</strong> ${{star.id}}<br>
@@ -248,56 +347,56 @@ def create_threejs_visualization(star_data):
     return html_content
 
 def main():
-    st.title("🌟 3D Star Viewer - Gaia Data")
+    st.title("3D Star Viewer - Gaia Data")
     st.markdown("Explore nearby stars in an interactive 3D visualization")
-    
+
     # Sidebar controls
     with st.sidebar:
-        st.header("⚙️ Configuration")
-        
+        st.header("Configuration")
+
         num_stars = st.slider(
             "Number of stars to display",
-            min_value=50,
-            max_value=2000,
+            min_value=1,
+            max_value=200000,
             value=300,
             step=50,
             help="Select how many nearby stars to fetch and display"
         )
-        
+
         max_distance = st.slider(
             "Maximum distance (parsecs)",
-            min_value=10,
-            max_value=100,
+            min_value=1,
+            max_value=10000,
             value=30,
             step=5,
             help="Maximum distance from Earth to include stars"
         )
-        
-        fetch_button = st.button("🚀 Fetch & Visualize Stars", type="primary")
-        
+
+        fetch_button = st.button("Fetch & Visualize Stars", type="primary")
+
         st.markdown("---")
-        st.markdown("### 📊 About the Data")
+        st.markdown("### About the Data")
         st.markdown("""
         This app fetches real star data from the **Gaia DR3** catalog, which contains
         precise measurements of nearly 2 billion stars in our galaxy.
         
         **Star Properties:**
-        - 🔵 Blue stars are the hottest
-        - 🟡 Yellow stars (like our Sun)
-        - 🔴 Red stars are the coolest
+        - Blue stars are the hottest
+        - Yellow stars (like our Sun)
+        - Red stars are the coolest
         - Size represents stellar radius
         """)
-    
+
     # Main content area
     if fetch_button:
-        with st.spinner(f"🔭 Fetching {num_stars} stars from Gaia catalog..."):
+        with st.spinner(f"Fetching {num_stars} stars from Gaia catalog..."):
             fetcher = GaiaStarFetcher()
             df = fetcher.fetch_nearby_stars(max_stars=num_stars, max_distance_pc=max_distance)
-            
+
             if df is not None:
                 # Save data
                 star_data = fetcher.save_data(df)
-                
+
                 # Display statistics
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
@@ -308,20 +407,20 @@ def main():
                     st.metric("Hottest Star", f"{df['temp_k'].max():.0f} K")
                 with col4:
                     st.metric("Largest Star", f"{df['radius_solar'].max():.1f} R☉")
-                
+
                 # Create and display the 3D visualization
                 html_content = create_threejs_visualization(star_data)
-                
+
                 # Embed the visualization
                 st.components.v1.html(html_content, height=600, scrolling=False)
-                
+
                 # Download options
                 st.markdown("---")
                 col1, col2 = st.columns(2)
                 with col1:
                     with open("data/star_data.json", "r") as f:
                         st.download_button(
-                            label="📥 Download JSON Data",
+                            label="Download JSON Data",
                             data=f.read(),
                             file_name="star_data.json",
                             mime="application/json"
@@ -329,17 +428,17 @@ def main():
                 with col2:
                     with open("data/star_data.csv", "r") as f:
                         st.download_button(
-                            label="📥 Download CSV Data",
+                            label="Download CSV Data",
                             data=f.read(),
                             file_name="star_data.csv",
                             mime="text/csv"
                         )
             else:
-                st.error("❌ Failed to fetch star data. Please try again.")
+                st.error("Failed to fetch star data. Please try again.")
     else:
         # Show placeholder
-        st.info("👆 Use the sidebar to configure and fetch star data")
-        
+        st.info("Use the sidebar to configure and fetch star data")
+
         # Display a sample image or placeholder
         st.markdown("""
         <div style='text-align: center; padding: 50px;'>
