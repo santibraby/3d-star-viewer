@@ -217,8 +217,8 @@ def create_threejs_visualization(star_data):
                 colors[i * 3 + 1] = color.g;
                 colors[i * 3 + 2] = color.b;
                 
-                // Size based on radius
-                sizes[i] = Math.max(0.5, Math.min(5, star.properties.radius_solar * 0.5));
+                // Size based on radius - slightly larger for solid dots
+                sizes[i] = Math.max(1.0, Math.min(8, star.properties.radius_solar * 0.8));
                 
                 // Store index for picking
                 starIndices[i] = i;
@@ -230,18 +230,22 @@ def create_threejs_visualization(star_data):
             geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
             geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
             
-            // Create star texture for point sprites
+            // Create star texture for point sprites - solid circle
             const canvas = document.createElement('canvas');
             canvas.width = 64;
             canvas.height = 64;
             const ctx = canvas.getContext('2d');
-            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-            gradient.addColorStop(0, 'rgba(255,255,255,1)');
-            gradient.addColorStop(0.2, 'rgba(255,255,255,0.8)');
-            gradient.addColorStop(0.4, 'rgba(255,255,255,0.3)');
-            gradient.addColorStop(1, 'rgba(255,255,255,0)');
-            ctx.fillStyle = gradient;
-            ctx.fillRect(0, 0, 64, 64);
+            
+            // Enable antialiasing
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            
+            // Create a solid circle
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(32, 32, 28, 0, Math.PI * 2);
+            ctx.fill();
+            
             const starTexture = new THREE.CanvasTexture(canvas);
             
             // Shader for colored point sprites
@@ -251,7 +255,7 @@ def create_threejs_visualization(star_data):
                 void main() {{
                     vColor = color;
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                    gl_PointSize = size * (300.0 / -mvPosition.z);
+                    gl_PointSize = size * (200.0 / -mvPosition.z);
                     gl_Position = projectionMatrix * mvPosition;
                 }}
             `;
@@ -261,7 +265,7 @@ def create_threejs_visualization(star_data):
                 varying vec3 vColor;
                 void main() {{
                     vec4 color = vec4(vColor, 1.0) * texture2D(pointTexture, gl_PointCoord);
-                    if (color.a < 0.01) discard;
+                    if (color.a < 0.5) discard;
                     gl_FragColor = color;
                 }}
             `;
@@ -273,7 +277,7 @@ def create_threejs_visualization(star_data):
                 }},
                 vertexShader: vertexShader,
                 fragmentShader: fragmentShader,
-                blending: THREE.AdditiveBlending,
+                blending: THREE.NormalBlending,
                 depthTest: true,
                 depthWrite: false,
                 vertexColors: true,
@@ -286,7 +290,7 @@ def create_threejs_visualization(star_data):
             
             // Raycaster for picking with threshold
             const raycaster = new THREE.Raycaster();
-            raycaster.params.Points.threshold = 0.5;
+            raycaster.params.Points.threshold = 1.0;
             const mouse = new THREE.Vector2();
             
             let selectedStarIndex = -1;
@@ -300,9 +304,7 @@ def create_threejs_visualization(star_data):
             // Create a separate geometry for the selected star
             const selectedStarGeometry = new THREE.SphereGeometry(0.5, 16, 16);
             const selectedStarMaterial = new THREE.MeshBasicMaterial({{
-                color: 0xFF1493,
-                emissive: 0xFF1493,
-                emissiveIntensity: 1
+                color: 0xFF1493
             }});
             const selectedStarMesh = new THREE.Mesh(selectedStarGeometry, selectedStarMaterial);
             selectedStarMesh.visible = false;
