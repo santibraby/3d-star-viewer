@@ -5,6 +5,7 @@ A Streamlit app that visualizes nearby stars in 3D using Three.js
 
 import streamlit as st
 import json
+import pandas as pd
 from pathlib import Path
 import base64
 from gaia_star_fetcher import GaiaStarFetcher
@@ -105,6 +106,12 @@ st.markdown("""
         border: 1px solid #555;
     }
     
+    /* Checkbox styling */
+    .stCheckbox label {
+        color: white !important;
+        font-family: 'Karla', sans-serif !important;
+    }
+    
     /* Download button styling */
     .stDownloadButton>button {
         background-color: #3d3d3d;
@@ -123,7 +130,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-def create_threejs_visualization(star_data):
+def create_threejs_visualization(star_data, show_blue=True, show_white=True, show_yellow=True):
     """Create the Three.js visualization HTML"""
     html_content = f"""
     <!DOCTYPE html>
@@ -188,6 +195,11 @@ def create_threejs_visualization(star_data):
             // Star data from Python
             const starData = {json.dumps(star_data)};
             
+            // Color filter states
+            const showBlue = {str(show_blue).lower()};
+            const showWhite = {str(show_white).lower()};
+            const showYellow = {str(show_yellow).lower()};
+            
             // Scene setup
             const scene = new THREE.Scene();
             scene.background = new THREE.Color(0x0a0a0a);
@@ -198,14 +210,30 @@ def create_threejs_visualization(star_data):
             renderer.setPixelRatio(window.devicePixelRatio);
             document.body.appendChild(renderer.domElement);
             
-            // Use Points for efficient rendering of many stars
-            const positions = new Float32Array(starData.stars.length * 3);
-            const colors = new Float32Array(starData.stars.length * 3);
-            const sizes = new Float32Array(starData.stars.length);
-            const starIndices = new Uint32Array(starData.stars.length);
+            // Filter stars based on temperature/color
+            const filteredStars = starData.stars.filter(star => {{
+                const temp = star.properties.temperature;
+                if (temp > 10000 && !showBlue) return false;  // Blue stars
+                if (temp >= 6000 && temp <= 10000 && !showWhite) return false;  // White stars
+                if (temp < 6000 && !showYellow) return false;  // Yellow/Red stars
+                return true;
+            }});
             
-            // Populate buffers
-            starData.stars.forEach((star, i) => {{
+            // Use Points for efficient rendering of many stars
+            const positions = new Float32Array(filteredStars.length * 3);
+            const colors = new Float32Array(filteredStars.length * 3);
+            const sizes = new Float32Array(filteredStars.length);
+            const starIndices = new Uint32Array(filteredStars.length);
+            
+            // Create mapping from filtered index to original index
+            const filteredToOriginalIndex = {{}};
+            
+            // Populate buffers with filtered stars
+            filteredStars.forEach((star, i) => {{
+                // Store mapping
+                const originalIndex = starData.stars.indexOf(star);
+                filteredToOriginalIndex[i] = originalIndex;
+                
                 // Position
                 positions[i * 3] = star.position.x;
                 positions[i * 3 + 1] = star.position.y;
@@ -217,8 +245,8 @@ def create_threejs_visualization(star_data):
                 colors[i * 3 + 1] = color.g;
                 colors[i * 3 + 2] = color.b;
                 
-                // Size based on radius - slightly larger for solid dots
-                sizes[i] = Math.max(1.0, Math.min(8, star.properties.radius_solar * 0.8));
+                // Size based on radius - reduced to 1/10
+                sizes[i] = Math.max(0.1, Math.min(0.8, star.properties.radius_solar * 0.08));
                 
                 // Store index for picking
                 starIndices[i] = i;
@@ -232,8 +260,8 @@ def create_threejs_visualization(star_data):
             
             // Create star texture for point sprites - solid circle
             const canvas = document.createElement('canvas');
-            canvas.width = 64;
-            canvas.height = 64;
+            canvas.width = 32;
+            canvas.height = 32;
             const ctx = canvas.getContext('2d');
             
             // Enable antialiasing
@@ -243,7 +271,7 @@ def create_threejs_visualization(star_data):
             // Create a solid circle
             ctx.fillStyle = 'white';
             ctx.beginPath();
-            ctx.arc(32, 32, 28, 0, Math.PI * 2);
+            ctx.arc(16, 16, 14, 0, Math.PI * 2);
             ctx.fill();
             
             const starTexture = new THREE.CanvasTexture(canvas);
@@ -255,7 +283,7 @@ def create_threejs_visualization(star_data):
                 void main() {{
                     vColor = color;
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                    gl_PointSize = size * (200.0 / -mvPosition.z);
+                    gl_PointSize = size * (50.0 / -mvPosition.z);
                     gl_Position = projectionMatrix * mvPosition;
                 }}
             `;
@@ -290,7 +318,7 @@ def create_threejs_visualization(star_data):
             
             // Raycaster for picking with threshold
             const raycaster = new THREE.Raycaster();
-            raycaster.params.Points.threshold = 1.0;
+            raycaster.params.Points.threshold = 0.1;
             const mouse = new THREE.Vector2();
             
             let selectedStarIndex = -1;
@@ -302,7 +330,7 @@ def create_threejs_visualization(star_data):
             }}
             
             // Create a separate geometry for the selected star
-            const selectedStarGeometry = new THREE.SphereGeometry(0.5, 16, 16);
+            const selectedStarGeometry = new THREE.SphereGeometry(0.05, 16, 16);
             const selectedStarMaterial = new THREE.MeshBasicMaterial({{
                 color: 0xFF1493
             }});
@@ -369,7 +397,7 @@ def create_threejs_visualization(star_data):
             }});
             
             renderer.domElement.addEventListener('wheel', (e) => {{
-                targetRadius = Math.max(1, Math.min(2000, targetRadius + e.deltaY * 0.05));
+                targetRadius = Math.max(0.5, Math.min(2000, targetRadius + e.deltaY * 0.05));
                 e.preventDefault();
             }});
             
@@ -395,7 +423,9 @@ def create_threejs_visualization(star_data):
                 
                 if (intersects.length > 0) {{
                     const intersect = intersects[0];
-                    selectedStarIndex = intersect.index;
+                    const filteredIndex = intersect.index;
+                    const originalIndex = filteredToOriginalIndex[filteredIndex];
+                    selectedStarIndex = originalIndex;
                     const star = starData.stars[selectedStarIndex];
                     
                     // Set new orbit target to selected star
@@ -406,7 +436,7 @@ def create_threejs_visualization(star_data):
                     );
                     
                     // Zoom in on the star
-                    targetRadius = 10; // Zoom closer to selected star
+                    targetRadius = 2; // Zoom very close since stars are tiny
                     panOffset.set(0, 0, 0); // Reset pan when selecting new star
                     
                     // Position selected star mesh
@@ -531,6 +561,15 @@ def main():
     st.title("3D Star Viewer - Gaia Data")
     st.markdown("Explore nearby stars in an interactive 3D visualization")
 
+    # Color filter toggles at the top
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        show_blue = st.checkbox("Blue Stars", value=True, help="Hot stars (>10,000K)")
+    with col2:
+        show_white = st.checkbox("White Stars", value=True, help="Medium stars (6,000-10,000K)")
+    with col3:
+        show_yellow = st.checkbox("Yellow/Red Stars", value=True, help="Cool stars (<6,000K)")
+
     # Sidebar controls
     with st.sidebar:
         st.header("Configuration")
@@ -562,10 +601,15 @@ def main():
         precise measurements of nearly 2 billion stars in our galaxy.
         
         **Star Properties:**
-        - Blue stars are the hottest
-        - Yellow stars (like our Sun)
-        - Red stars are the coolest
+        - Blue stars are the hottest (>10,000K)
+        - White stars are medium temperature (6,000-10,000K)
+        - Yellow/Red stars are the coolest (<6,000K)
         - Size represents stellar radius
+        
+        **Color Categories:**
+        - **Blue**: O, B, and hot A-type stars
+        - **White**: Cool A and F-type stars  
+        - **Yellow/Red**: G, K, and M-type stars (Sun is G-type)
         """)
 
     # Main content area
@@ -577,6 +621,9 @@ def main():
             if df is not None:
                 # Save data
                 star_data = fetcher.save_data(df)
+
+                # Store in session state for filtering
+                st.session_state.star_data = star_data
 
                 # Display statistics
                 col1, col2, col3, col4 = st.columns(4)
@@ -590,7 +637,7 @@ def main():
                     st.metric("Largest Star", f"{df['radius_solar'].max():.1f} R☉")
 
                 # Create and display the 3D visualization
-                html_content = create_threejs_visualization(star_data)
+                html_content = create_threejs_visualization(star_data, show_blue, show_white, show_yellow)
 
                 # Embed the visualization
                 st.components.v1.html(html_content, height=600, scrolling=False)
