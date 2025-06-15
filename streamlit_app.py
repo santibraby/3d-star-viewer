@@ -164,9 +164,19 @@ def create_threejs_visualization(star_data):
                 border: 1px solid #555;
                 display: none;
             }}
+            #loading {{
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                color: white;
+                font-family: 'Karla', sans-serif;
+                font-size: 18px;
+            }}
         </style>
     </head>
     <body>
+        <div id="loading">Loading stars...</div>
         <div id="info">
             Left Click + Drag: Rotate | Right Click + Drag: Pan | Scroll: Zoom<br>
             Click on a star for details
@@ -180,53 +190,120 @@ def create_threejs_visualization(star_data):
             
             // Scene setup
             const scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x0a0a0a); // Very dark grey, almost black
+            scene.background = new THREE.Color(0x0a0a0a);
             
-            const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000);
             const renderer = new THREE.WebGLRenderer({{ antialias: true }});
             renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
             document.body.appendChild(renderer.domElement);
             
-            // Add stars to scene
-            const starGroup = new THREE.Group();
-            const starMeshes = [];
-            const raycaster = new THREE.Raycaster();
-            const mouse = new THREE.Vector2();
-            let selectedStar = null;
-            let originalMaterial = null;
-            let connectionLine = null;
+            // Use Points for efficient rendering of many stars
+            const positions = new Float32Array(starData.stars.length * 3);
+            const colors = new Float32Array(starData.stars.length * 3);
+            const sizes = new Float32Array(starData.stars.length);
+            const starIndices = new Uint32Array(starData.stars.length);
             
-            starData.stars.forEach((star, index) => {{
-                // Create sphere geometry for each star - scaled down by 1/10
-                const radius = Math.max(0.01, Math.min(0.2, star.properties.radius_solar * 0.03));
-                const geometry = new THREE.SphereGeometry(radius, 16, 16);
+            // Populate buffers
+            starData.stars.forEach((star, i) => {{
+                // Position
+                positions[i * 3] = star.position.x;
+                positions[i * 3 + 1] = star.position.y;
+                positions[i * 3 + 2] = star.position.z;
                 
-                // Create material with star color
-                const material = new THREE.MeshBasicMaterial({{
-                    color: star.properties.color,
-                    emissive: star.properties.color,
-                    emissiveIntensity: 1
-                }});
+                // Color - convert hex to RGB
+                const color = new THREE.Color(star.properties.color);
+                colors[i * 3] = color.r;
+                colors[i * 3 + 1] = color.g;
+                colors[i * 3 + 2] = color.b;
                 
-                const mesh = new THREE.Mesh(geometry, material);
-                mesh.position.set(star.position.x, star.position.y, star.position.z);
-                mesh.userData = star;
+                // Size based on radius
+                sizes[i] = Math.max(0.5, Math.min(5, star.properties.radius_solar * 0.5));
                 
-                starGroup.add(mesh);
-                starMeshes.push(mesh);
+                // Store index for picking
+                starIndices[i] = i;
             }});
             
-            scene.add(starGroup);
+            // Create BufferGeometry
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
             
-            // Add some ambient light
-            const ambientLight = new THREE.AmbientLight(0x404040);
-            scene.add(ambientLight);
+            // Create star texture for point sprites
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+            gradient.addColorStop(0, 'rgba(255,255,255,1)');
+            gradient.addColorStop(0.2, 'rgba(255,255,255,0.8)');
+            gradient.addColorStop(0.4, 'rgba(255,255,255,0.3)');
+            gradient.addColorStop(1, 'rgba(255,255,255,0)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 64, 64);
+            const starTexture = new THREE.CanvasTexture(canvas);
             
-            // Camera position
-            camera.position.set(30, 30, 30);
-            camera.lookAt(0, 0, 0);
+            // Shader for colored point sprites
+            const vertexShader = `
+                attribute float size;
+                varying vec3 vColor;
+                void main() {{
+                    vColor = color;
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    gl_PointSize = size * (300.0 / -mvPosition.z);
+                    gl_Position = projectionMatrix * mvPosition;
+                }}
+            `;
             
-            // Controls
+            const fragmentShader = `
+                uniform sampler2D pointTexture;
+                varying vec3 vColor;
+                void main() {{
+                    vec4 color = vec4(vColor, 1.0) * texture2D(pointTexture, gl_PointCoord);
+                    if (color.a < 0.01) discard;
+                    gl_FragColor = color;
+                }}
+            `;
+            
+            // Create material
+            const material = new THREE.ShaderMaterial({{
+                uniforms: {{
+                    pointTexture: {{ value: starTexture }}
+                }},
+                vertexShader: vertexShader,
+                fragmentShader: fragmentShader,
+                blending: THREE.AdditiveBlending,
+                depthTest: true,
+                depthWrite: false,
+                vertexColors: true,
+                transparent: true
+            }});
+            
+            // Create points
+            const starPoints = new THREE.Points(geometry, material);
+            scene.add(starPoints);
+            
+            // Raycaster for picking with threshold
+            const raycaster = new THREE.Raycaster();
+            raycaster.params.Points.threshold = 0.5;
+            const mouse = new THREE.Vector2();
+            
+            let selectedStarIndex = -1;
+            let connectionLine = null;
+            
+            // Create a separate geometry for the selected star
+            const selectedStarGeometry = new THREE.SphereGeometry(0.5, 16, 16);
+            const selectedStarMaterial = new THREE.MeshBasicMaterial({{
+                color: 0xFF1493,
+                emissive: 0xFF1493,
+                emissiveIntensity: 1
+            }});
+            const selectedStarMesh = new THREE.Mesh(selectedStarGeometry, selectedStarMaterial);
+            selectedStarMesh.visible = false;
+            scene.add(selectedStarMesh);
+            
+            // Camera controls
             let isMouseDown = false;
             let mouseButton = -1;
             let mouseX = 0;
@@ -243,6 +320,7 @@ def create_threejs_visualization(star_data):
                 camera.lookAt(panOffset);
             }}
             
+            // Mouse controls
             renderer.domElement.addEventListener('mousedown', (e) => {{
                 isMouseDown = true;
                 mouseButton = e.button;
@@ -260,10 +338,10 @@ def create_threejs_visualization(star_data):
                     const deltaX = e.clientX - mouseX;
                     const deltaY = e.clientY - mouseY;
                     
-                    if (mouseButton === 0) {{ // Left click - rotate
+                    if (mouseButton === 0) {{
                         cameraTheta -= deltaX * 0.01;
                         cameraPhi = Math.max(0.1, Math.min(Math.PI - 0.1, cameraPhi - deltaY * 0.01));
-                    }} else if (mouseButton === 2) {{ // Right click - pan
+                    }} else if (mouseButton === 2) {{
                         const panSpeed = 0.1;
                         const right = new THREE.Vector3();
                         const up = new THREE.Vector3();
@@ -281,7 +359,7 @@ def create_threejs_visualization(star_data):
             }});
             
             renderer.domElement.addEventListener('wheel', (e) => {{
-                cameraRadius = Math.max(5, Math.min(200, cameraRadius + e.deltaY * 0.05));
+                cameraRadius = Math.max(5, Math.min(2000, cameraRadius + e.deltaY * 0.05));
                 updateCamera();
                 e.preventDefault();
             }});
@@ -290,18 +368,13 @@ def create_threejs_visualization(star_data):
                 e.preventDefault();
             }});
             
-            // Click detection for star info and hot pink selection
+            // Click detection
             renderer.domElement.addEventListener('click', (e) => {{
                 mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
                 mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
                 
                 raycaster.setFromCamera(mouse, camera);
-                const intersects = raycaster.intersectObjects(starMeshes);
-                
-                // Reset previous selection
-                if (selectedStar && originalMaterial) {{
-                    selectedStar.material = originalMaterial;
-                }}
+                const intersects = raycaster.intersectObject(starPoints);
                 
                 // Remove previous connection line
                 if (connectionLine) {{
@@ -312,48 +385,44 @@ def create_threejs_visualization(star_data):
                 }}
                 
                 if (intersects.length > 0) {{
-                    const clickedStar = intersects[0].object;
-                    const star = clickedStar.userData;
+                    const intersect = intersects[0];
+                    selectedStarIndex = intersect.index;
+                    const star = starData.stars[selectedStarIndex];
                     
-                    // Store original material and create hot pink material
-                    originalMaterial = clickedStar.material;
-                    selectedStar = clickedStar;
+                    // Position selected star mesh
+                    selectedStarMesh.position.set(
+                        star.position.x,
+                        star.position.y,
+                        star.position.z
+                    );
+                    selectedStarMesh.visible = true;
                     
-                    // Create hot pink material for selection
-                    clickedStar.material = new THREE.MeshBasicMaterial({{
-                        color: 0xFF1493,  // Hot pink
-                        emissive: 0xFF1493,
-                        emissiveIntensity: 1
-                    }});
+                    // Create line to info box
+                    const starWorldPos = new THREE.Vector3(
+                        star.position.x,
+                        star.position.y,
+                        star.position.z
+                    );
                     
-                    // Create line from star to info box
-                    const starWorldPos = new THREE.Vector3();
-                    clickedStar.getWorldPosition(starWorldPos);
-                    
-                    // Convert info box position to 3D world coordinates
-                    const infoBoxX = -0.9; // Left side of screen in normalized coords
-                    const infoBoxY = -0.8; // Bottom of screen in normalized coords
-                    
+                    const infoBoxX = -0.9;
+                    const infoBoxY = -0.8;
                     const vector = new THREE.Vector3(infoBoxX, infoBoxY, 0.5);
                     vector.unproject(camera);
                     const dir = vector.sub(camera.position).normalize();
-                    const distance = 20; // Fixed distance from camera
+                    const distance = 20;
                     const infoBoxWorldPos = camera.position.clone().add(dir.multiplyScalar(distance));
                     
-                    // Create line geometry
                     const lineGeometry = new THREE.BufferGeometry().setFromPoints([
                         starWorldPos,
                         infoBoxWorldPos
                     ]);
                     
-                    // Create line material
                     const lineMaterial = new THREE.LineBasicMaterial({{
-                        color: 0xFF1493, // Hot pink to match selected star
+                        color: 0xFF1493,
                         opacity: 0.6,
                         transparent: true
                     }});
                     
-                    // Create and add line to scene
                     connectionLine = new THREE.Line(lineGeometry, lineMaterial);
                     scene.add(connectionLine);
                     
@@ -368,6 +437,9 @@ def create_threejs_visualization(star_data):
                         <strong>RA/Dec:</strong> ${{star.properties.ra.toFixed(3)}}°, ${{star.properties.dec.toFixed(3)}}°
                     `;
                     infoDiv.style.display = 'block';
+                }} else {{
+                    selectedStarMesh.visible = false;
+                    document.getElementById('star-info').style.display = 'none';
                 }}
             }});
             
@@ -383,11 +455,14 @@ def create_threejs_visualization(star_data):
                 requestAnimationFrame(animate);
                 
                 // Update connection line if it exists
-                if (connectionLine && selectedStar) {{
-                    const starWorldPos = new THREE.Vector3();
-                    selectedStar.getWorldPosition(starWorldPos);
+                if (connectionLine && selectedStarIndex >= 0) {{
+                    const star = starData.stars[selectedStarIndex];
+                    const starWorldPos = new THREE.Vector3(
+                        star.position.x,
+                        star.position.y,
+                        star.position.z
+                    );
                     
-                    // Recalculate info box position based on current camera
                     const infoBoxX = -0.9;
                     const infoBoxY = -0.8;
                     const vector = new THREE.Vector3(infoBoxX, infoBoxY, 0.5);
@@ -396,7 +471,6 @@ def create_threejs_visualization(star_data):
                     const distance = 20;
                     const infoBoxWorldPos = camera.position.clone().add(dir.multiplyScalar(distance));
                     
-                    // Update line positions
                     const positions = connectionLine.geometry.attributes.position.array;
                     positions[0] = starWorldPos.x;
                     positions[1] = starWorldPos.y;
@@ -409,6 +483,9 @@ def create_threejs_visualization(star_data):
                 
                 renderer.render(scene, camera);
             }}
+            
+            // Hide loading message
+            document.getElementById('loading').style.display = 'none';
             
             updateCamera();
             animate();
