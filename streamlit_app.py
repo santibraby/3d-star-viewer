@@ -246,7 +246,7 @@ def create_threejs_visualization(star_data, show_blue=True, show_white=True, sho
                 colors[i * 3 + 2] = color.b;
                 
                 // Size based on radius - reduced to 1/10
-                sizes[i] = Math.max(0.02, Math.min(0.08, star.properties.radius_solar * 0.008));
+                sizes[i] = Math.max(0.02, Math.min(0.08, star.properties.radius_solar * 0.08));
                 
                 // Store index for picking
                 starIndices[i] = i;
