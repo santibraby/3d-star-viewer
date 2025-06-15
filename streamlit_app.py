@@ -179,7 +179,7 @@ def create_threejs_visualization(star_data):
         <div id="loading">Loading stars...</div>
         <div id="info">
             Left Click + Drag: Rotate | Right Click + Drag: Pan | Scroll: Zoom<br>
-            Click on a star for details
+            Click on a star to select and orbit around it | Click empty space to reset
         </div>
         <div id="star-info"></div>
         
@@ -292,6 +292,11 @@ def create_threejs_visualization(star_data):
             let selectedStarIndex = -1;
             let connectionLine = null;
             
+            // Smooth transition function
+            function smoothTransition(from, to, alpha) {{
+                return from + (to - from) * alpha;
+            }}
+            
             // Create a separate geometry for the selected star
             const selectedStarGeometry = new THREE.SphereGeometry(0.5, 16, 16);
             const selectedStarMaterial = new THREE.MeshBasicMaterial({{
@@ -312,12 +317,15 @@ def create_threejs_visualization(star_data):
             let cameraTheta = Math.PI / 4;
             let cameraPhi = Math.PI / 4;
             let panOffset = new THREE.Vector3(0, 0, 0);
+            let orbitTarget = new THREE.Vector3(0, 0, 0);
+            let targetOrbitPosition = new THREE.Vector3(0, 0, 0);
+            let targetRadius = 50;
             
             function updateCamera() {{
-                camera.position.x = cameraRadius * Math.sin(cameraPhi) * Math.cos(cameraTheta) + panOffset.x;
-                camera.position.y = cameraRadius * Math.cos(cameraPhi) + panOffset.y;
-                camera.position.z = cameraRadius * Math.sin(cameraPhi) * Math.sin(cameraTheta) + panOffset.z;
-                camera.lookAt(panOffset);
+                camera.position.x = cameraRadius * Math.sin(cameraPhi) * Math.cos(cameraTheta) + orbitTarget.x + panOffset.x;
+                camera.position.y = cameraRadius * Math.cos(cameraPhi) + orbitTarget.y + panOffset.y;
+                camera.position.z = cameraRadius * Math.sin(cameraPhi) * Math.sin(cameraTheta) + orbitTarget.z + panOffset.z;
+                camera.lookAt(orbitTarget.x + panOffset.x, orbitTarget.y + panOffset.y, orbitTarget.z + panOffset.z);
             }}
             
             // Mouse controls
@@ -359,8 +367,7 @@ def create_threejs_visualization(star_data):
             }});
             
             renderer.domElement.addEventListener('wheel', (e) => {{
-                cameraRadius = Math.max(5, Math.min(2000, cameraRadius + e.deltaY * 0.05));
-                updateCamera();
+                targetRadius = Math.max(1, Math.min(2000, targetRadius + e.deltaY * 0.05));
                 e.preventDefault();
             }});
             
@@ -388,6 +395,17 @@ def create_threejs_visualization(star_data):
                     const intersect = intersects[0];
                     selectedStarIndex = intersect.index;
                     const star = starData.stars[selectedStarIndex];
+                    
+                    // Set new orbit target to selected star
+                    targetOrbitPosition.set(
+                        star.position.x,
+                        star.position.y,
+                        star.position.z
+                    );
+                    
+                    // Zoom in on the star
+                    targetRadius = 10; // Zoom closer to selected star
+                    panOffset.set(0, 0, 0); // Reset pan when selecting new star
                     
                     // Position selected star mesh
                     selectedStarMesh.position.set(
@@ -438,8 +456,13 @@ def create_threejs_visualization(star_data):
                     `;
                     infoDiv.style.display = 'block';
                 }} else {{
+                    // Clicking empty space - reset to origin
                     selectedStarMesh.visible = false;
+                    selectedStarIndex = -1;
                     document.getElementById('star-info').style.display = 'none';
+                    targetOrbitPosition.set(0, 0, 0);
+                    targetRadius = 50;
+                    panOffset.set(0, 0, 0);
                 }}
             }});
             
@@ -453,6 +476,13 @@ def create_threejs_visualization(star_data):
             // Animation loop
             function animate() {{
                 requestAnimationFrame(animate);
+                
+                // Smooth camera transitions
+                cameraRadius = smoothTransition(cameraRadius, targetRadius, 0.1);
+                orbitTarget.x = smoothTransition(orbitTarget.x, targetOrbitPosition.x, 0.1);
+                orbitTarget.y = smoothTransition(orbitTarget.y, targetOrbitPosition.y, 0.1);
+                orbitTarget.z = smoothTransition(orbitTarget.z, targetOrbitPosition.z, 0.1);
+                updateCamera();
                 
                 // Update connection line if it exists
                 if (connectionLine && selectedStarIndex >= 0) {{
@@ -538,10 +568,6 @@ def main():
 
     # Main content area
     if fetch_button:
-        # Warning for very large queries
-        if num_stars > 100000:
-            st.warning("Large queries may take several minutes and could timeout. Consider starting with a smaller number of stars.")
-
         with st.spinner(f"Fetching {num_stars} stars from Gaia catalog..."):
             fetcher = GaiaStarFetcher()
             df = fetcher.fetch_nearby_stars(max_stars=num_stars, max_distance_pc=max_distance)
@@ -566,26 +592,6 @@ def main():
 
                 # Embed the visualization
                 st.components.v1.html(html_content, height=600, scrolling=False)
-
-                # Download options
-                st.markdown("---")
-                col1, col2 = st.columns(2)
-                with col1:
-                    with open("data/star_data.json", "r") as f:
-                        st.download_button(
-                            label="Download JSON Data",
-                            data=f.read(),
-                            file_name="star_data.json",
-                            mime="application/json"
-                        )
-                with col2:
-                    with open("data/star_data.csv", "r") as f:
-                        st.download_button(
-                            label="Download CSV Data",
-                            data=f.read(),
-                            file_name="star_data.csv",
-                            mime="text/csv"
-                        )
             else:
                 st.error("Failed to fetch star data. Please try again.")
     else:
