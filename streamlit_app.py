@@ -22,14 +22,24 @@ st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Karla:wght@300;400;600&display=swap');
     
+    /* Hide Streamlit header */
+    header[data-testid="stHeader"] {
+        display: none;
+    }
+    
+    /* Adjust main view to use full height */
+    .main > div {
+        padding-top: 0rem;
+    }
+    
     /* Main app styling */
     .stApp {
-        background-color: #2b2b2b;
+        background-color: #0a0a0a;
     }
     
     .main {
         padding-top: 0rem;
-        background-color: #2b2b2b;
+        background-color: #0a0a0a;
     }
     
     .block-container {
@@ -125,7 +135,7 @@ def create_threejs_visualization(star_data):
             body {{ 
                 margin: 0; 
                 overflow: hidden; 
-                background: #2b2b2b; 
+                background: #0a0a0a; 
             }}
             #info {{
                 position: absolute;
@@ -170,7 +180,7 @@ def create_threejs_visualization(star_data):
             
             // Scene setup
             const scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x2b2b2b); // Dark grey background
+            scene.background = new THREE.Color(0x0a0a0a); // Very dark grey, almost black
             
             const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
             const renderer = new THREE.WebGLRenderer({{ antialias: true }});
@@ -184,10 +194,11 @@ def create_threejs_visualization(star_data):
             const mouse = new THREE.Vector2();
             let selectedStar = null;
             let originalMaterial = null;
+            let connectionLine = null;
             
             starData.stars.forEach((star, index) => {{
-                // Create sphere geometry for each star
-                const radius = Math.max(0.1, Math.min(2, star.properties.radius_solar * 0.3));
+                // Create sphere geometry for each star - scaled down by 1/10
+                const radius = Math.max(0.01, Math.min(0.2, star.properties.radius_solar * 0.03));
                 const geometry = new THREE.SphereGeometry(radius, 16, 16);
                 
                 // Create material with star color
@@ -292,6 +303,14 @@ def create_threejs_visualization(star_data):
                     selectedStar.material = originalMaterial;
                 }}
                 
+                // Remove previous connection line
+                if (connectionLine) {{
+                    scene.remove(connectionLine);
+                    connectionLine.geometry.dispose();
+                    connectionLine.material.dispose();
+                    connectionLine = null;
+                }}
+                
                 if (intersects.length > 0) {{
                     const clickedStar = intersects[0].object;
                     const star = clickedStar.userData;
@@ -306,6 +325,37 @@ def create_threejs_visualization(star_data):
                         emissive: 0xFF1493,
                         emissiveIntensity: 1
                     }});
+                    
+                    // Create line from star to info box
+                    const starWorldPos = new THREE.Vector3();
+                    clickedStar.getWorldPosition(starWorldPos);
+                    
+                    // Convert info box position to 3D world coordinates
+                    const infoBoxX = -0.9; // Left side of screen in normalized coords
+                    const infoBoxY = -0.8; // Bottom of screen in normalized coords
+                    
+                    const vector = new THREE.Vector3(infoBoxX, infoBoxY, 0.5);
+                    vector.unproject(camera);
+                    const dir = vector.sub(camera.position).normalize();
+                    const distance = 20; // Fixed distance from camera
+                    const infoBoxWorldPos = camera.position.clone().add(dir.multiplyScalar(distance));
+                    
+                    // Create line geometry
+                    const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+                        starWorldPos,
+                        infoBoxWorldPos
+                    ]);
+                    
+                    // Create line material
+                    const lineMaterial = new THREE.LineBasicMaterial({{
+                        color: 0xFF1493, // Hot pink to match selected star
+                        opacity: 0.6,
+                        transparent: true
+                    }});
+                    
+                    // Create and add line to scene
+                    connectionLine = new THREE.Line(lineGeometry, lineMaterial);
+                    scene.add(connectionLine);
                     
                     // Update info display
                     const infoDiv = document.getElementById('star-info');
@@ -332,8 +382,30 @@ def create_threejs_visualization(star_data):
             function animate() {{
                 requestAnimationFrame(animate);
                 
-                // Slowly rotate the star field for effect
-                starGroup.rotation.y += 0.0001;
+                // Update connection line if it exists
+                if (connectionLine && selectedStar) {{
+                    const starWorldPos = new THREE.Vector3();
+                    selectedStar.getWorldPosition(starWorldPos);
+                    
+                    // Recalculate info box position based on current camera
+                    const infoBoxX = -0.9;
+                    const infoBoxY = -0.8;
+                    const vector = new THREE.Vector3(infoBoxX, infoBoxY, 0.5);
+                    vector.unproject(camera);
+                    const dir = vector.sub(camera.position).normalize();
+                    const distance = 20;
+                    const infoBoxWorldPos = camera.position.clone().add(dir.multiplyScalar(distance));
+                    
+                    // Update line positions
+                    const positions = connectionLine.geometry.attributes.position.array;
+                    positions[0] = starWorldPos.x;
+                    positions[1] = starWorldPos.y;
+                    positions[2] = starWorldPos.z;
+                    positions[3] = infoBoxWorldPos.x;
+                    positions[4] = infoBoxWorldPos.y;
+                    positions[5] = infoBoxWorldPos.z;
+                    connectionLine.geometry.attributes.position.needsUpdate = true;
+                }}
                 
                 renderer.render(scene, camera);
             }}
@@ -356,8 +428,8 @@ def main():
 
         num_stars = st.slider(
             "Number of stars to display",
-            min_value=1,
-            max_value=200000,
+            min_value=50,
+            max_value=1000000,
             value=300,
             step=50,
             help="Select how many nearby stars to fetch and display"
@@ -365,10 +437,10 @@ def main():
 
         max_distance = st.slider(
             "Maximum distance (parsecs)",
-            min_value=1,
-            max_value=10000,
+            min_value=10,
+            max_value=1000000,
             value=30,
-            step=5,
+            step=10,
             help="Maximum distance from Earth to include stars"
         )
 
@@ -389,6 +461,10 @@ def main():
 
     # Main content area
     if fetch_button:
+        # Warning for very large queries
+        if num_stars > 100000:
+            st.warning("Large queries may take several minutes and could timeout. Consider starting with a smaller number of stars.")
+
         with st.spinner(f"Fetching {num_stars} stars from Gaia catalog..."):
             fetcher = GaiaStarFetcher()
             df = fetcher.fetch_nearby_stars(max_stars=num_stars, max_distance_pc=max_distance)
