@@ -245,8 +245,8 @@ def create_threejs_visualization(star_data, show_blue=True, show_white=True, sho
                 colors[i * 3 + 1] = color.g;
                 colors[i * 3 + 2] = color.b;
                 
-                // Size based on radius - reduced to 1/10
-                sizes[i] = Math.max(0.8, Math.min(0.4, star.properties.radius_solar * 0.05));
+                // Size based on radius - adjusted values
+                sizes[i] = Math.max(0.4, Math.min(0.8, star.properties.radius_solar * 0.05));
                 
                 // Store index for picking
                 starIndices[i] = i;
@@ -606,6 +606,11 @@ def main():
         - Yellow/Red stars are the coolest (<6,000K)
         - Size represents stellar radius
         
+        **In-Viewer Controls:**
+        - Toggle star colors with checkboxes (top right)
+        - Real-time filtering without reloading
+        - See visible/total star count
+        
         **Color Categories:**
         - **Blue**: O, B, and hot A-type stars
         - **White**: Cool A and F-type stars  
@@ -637,10 +642,10 @@ def main():
                     st.metric("Largest Star", f"{df['radius_solar'].max():.1f} R☉")
 
                 # Create and display the 3D visualization
-                html_content = create_threejs_visualization(star_data, show_blue, show_white, show_yellow)
+                html_content = create_threejs_visualization(star_data)
 
                 # Embed the visualization
-                st.components.v1.html(html_content, height=600, scrolling=False)
+                st.components.v1.html(html_content, height=700, scrolling=False)
             else:
                 st.error("Failed to fetch star data. Please try again.")
     else:
